@@ -286,29 +286,64 @@ def addPubkey(pubkey_hex_str,signature_hex_str,headers,username):
     }
     urlSend(url,headers,payload)
     
-def getLoginserverRecord(headers,username,pubkey_hex_str):
+def getLoginserverRecord(headers, username, pubkey_hex_str):
+    """[Calls the getLoginserverRecord endpoint from the kiwiland] login server
+    to retrieve the login server record for a given pubkey. This function will return
+    the loginserver_record and NOT the JSON it came as. Errorhandling to be added]
+
+    Arguments:
+        headers {[dict]} -- [headers to be sent]
+        username {[string]} -- [The users usernam]
+        pubkey_hex_str {[string]} -- [pubkey encoded in hex, decoded in utf-8]
+
+    Returns:
+        [string] -- [The Loginserver_record for the pubkey provided]
+    """
     url = "http://cs302.kiwi.land/api/get_loginserver_record"
-    now=str(time.time())
+    now = str(time.time())
     payload = {
         "username": username,
         "client_time": now,
-        "pubkey":pubkey_hex_str
+        "pubkey": pubkey_hex_str
     }
-    return urlSend(url,headers,payload)['loginserver_record']
-    
-def report(headers,pubkey_hex_str):
+    # TODO add error handling for invalid records/keys
+    return urlSend(url, headers, payload)['loginserver_record']
+
+
+def report(headers, pubkey_hex_str):
+    """[This function makes the api call report on the kiwiland login server.
+    This function will attempt to notify the login server that the inputed pubkey
+    is intended for use for messaging. The pubkey should be asscociated with the account
+    already]
+
+    Arguments:
+        headers {[dict]} -- [headers to be sent]
+        pubkey_hex_str {[string]} -- [pubkey encoded in hex, decoded in utf-8]
+    """
     url = "http://cs302.kiwi.land/api/report"
-    payload={
-        "connection_address": "127.0.0.1:8000",  
+    payload = {
+        "connection_address": "127.0.0.1:8000",
         "connection_location": 1,
         "incoming_pubkey": pubkey_hex_str
     }
-    urlSend(url,headers,payload)
-    
+    # TODO error handling
+    urlSend(url, headers, payload)
+
+
 def getServerPubkey(headers):
-    url="http://cs302.kiwi.land/api/loginserver_pubkey"
-    payload={}
-    pubkey=urlSend(url,headers,payload)["pubkey"]
+    """[Calls the getServerPubkey endpoint on the kiwiland login server and retrieves the
+    pubkey required for private messaging with the login server. This will be returned as
+    a NACL.VERIFY KEY not a STRING.]
+
+    Arguments:
+        headers {[dict]} -- [headers to be sent]
+
+    Returns:
+        [VerifyKey] -- [the login server's public key used to encrypt private messages sent to the login server]
+    """
+    url = "http://cs302.kiwi.land/api/loginserver_pubkey"
+    payload = {}
+    pubkey = urlSend(url, headers, payload)["pubkey"]
     return nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
     
 def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,username,privateKey):
