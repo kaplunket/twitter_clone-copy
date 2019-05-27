@@ -23,7 +23,6 @@ DefaultHeader="""
             <div id="navbar">
             <a href="/">Home</a>
             <a href="/login">Login</a>
-            <a href="/message">Message</a>
             </div><script src="default.js"></script>
             <div class="content">"""
 LoginHeader="""
@@ -31,9 +30,11 @@ LoginHeader="""
             <a href="/">Home</a>
             <a href="/signout">Log Out</a>
             <a href="/message">Message</a>
+            <a href="/users">Users</a>
             </div><script src="default.js"></script>
             <div class="content">"""
 endHTML="</div></body></html>"
+headers=""
 class MainApp(object):
 
         # CherryPy Configuration
@@ -83,18 +84,66 @@ class MainApp(object):
     
     @cherrypy.expose
     def message(self):
-        Page = startHTML
-        Page += '<form autocomplete="off" action="/publicMessage" method="post" enctype="multipart/form-data">'
-        Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="10" cols="30" size="50" type="text"> </textarea><br/>'
+        Page = startHTML +LoginHeader +"<test>"
+        Page += '<form autocomplete="off" action="/public" method="post" enctype="multipart/form-data">'
+        Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
         Page += '<input type="submit" value="Submit"/></form>'
-        Page += "</b></test>"
+        Page += "</test>"
         Page += endHTML
         return Page
     
+    @cherrypy.expose
+    def private(self,user="",message=""):
+        global headers
+        signing_key1=loadPrivateKeys()
+        #seems to always make the same public key, no salt i guess
+        verify_key1=generatePublicKey(signing_key1)
+        # Serialize the verify key to send it to a third party
+        pubkey_hex = verify_key1.encode(encoder=nacl.encoding.HexEncoder)
+        pubkey_hex_str = pubkey_hex.decode('utf-8')
+        record=getLoginserverRecord(headers,cherrypy.session['username'],pubkey_hex_str)
+        privateMessage(headers,record,getServerPubkey(headers),user,message,cherrypy.session['username'],signing_key1)
+        raise cherrypy.HTTPRedirect('/')
     
     @cherrypy.expose
-    def publicMessage(self,message=""):
-        print(message)
+    def p2p(self,user=""):
+        print(user)
+        Page = startHTML +LoginHeader +"<test>"
+        Page += '<form autocomplete="off" action="/private" method="post" enctype="multipart/form-data">'
+        Page += '<input type="hidden" name="user" value=' + user + ' />'
+        Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
+        Page += '<input type="submit" value="Submit"/></form>'
+        Page += "</test>"
+        Page += endHTML
+        return Page
+    
+    @cherrypy.expose
+    def checkLogin(self):
+        try:
+            user=cherrypy.session['username']
+        except KeyError:
+            raise cherrypy.HTTPRedirect('/')
+    
+    @cherrypy.expose
+    def users(self):
+        Page = startHTML +LoginHeader
+        Page += """
+            <ul>
+            <li onclick="location.href = 'p2p?user=admin';">Make A List Item Clickable</li>
+            </ul>
+            """
+        Page += "<ul>"
+        userList=getUsers()
+        for i in userList["users"]:
+            Page +="""<li onclick="location.href = 'p2p?user=""" + i['username'] + """';">"""
+            Page += i['username']+" Status: "+i['status']+" Connection address: "+i['connection_address'] 
+            Page +='</li></br>'
+        Page += "</ul>"
+        return Page
+    
+    @cherrypy.expose
+    def public(self,message=""):
+        publicMessage(message)
         raise cherrypy.HTTPRedirect('/')
     
     @cherrypy.expose
@@ -309,7 +358,6 @@ def getLoginserverRecord(headers, username, pubkey_hex_str):
     # TODO add error handling for invalid records/keys
     return urlSend(url, headers, payload)['loginserver_record']
 
-
 def report(headers, pubkey_hex_str):
     """[This function makes the api call report on the kiwiland login server.
     This function will attempt to notify the login server that the inputed pubkey
@@ -328,7 +376,6 @@ def report(headers, pubkey_hex_str):
     }
     # TODO error handling
     urlSend(url, headers, payload)
-
 
 def getServerPubkey(headers):
     """[Calls the getServerPubkey endpoint on the kiwiland login server and retrieves the
@@ -368,8 +415,52 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
           "signature" : signature_hex_str
     }
     urlSend(url,headers,payload)
+  
+def publicMessage(message):
+    global headers
+    url = "http://cs302.kiwi.land/api/rx_broadcast"
+    signing_key1=loadPrivateKeys()
+        
+    #seems to always make the same public key, no salt i guess
+    verify_key1=generatePublicKey(signing_key1)
+    #signing_key = nacl.signing.SigningKey(hex_key, encoder=nacl.encoding.HexEncoder)
+    savePrivateKey(signing_key1.encode(encoder=nacl.encoding.HexEncoder),verify_key1.encode(encoder=nacl.encoding.HexEncoder))
+        
+        
+    # Serialize the verify key to send it to a third party
+    pubkey_hex = verify_key1.encode(encoder=nacl.encoding.HexEncoder)
+    pubkey_hex_str = pubkey_hex.decode('utf-8')
+    
+    now = str(time.time())
+    username=cherrypy.session['username']
+    Login_server_record_str=getLoginserverRecord(headers,username,pubkey_hex_str)
+    message_bytes = bytes(Login_server_record_str+message+now, encoding='utf-8')
+
+
+    # Sign a message with the signing key
+    signed = signing_key1.sign(
+        message_bytes, encoder=nacl.encoding.HexEncoder)
+    signature_hex_str = signed.signature.decode('utf-8')
+        
+    payload = {
+        "loginserver_record":Login_server_record_str,
+        "message": message,
+        "sender_created_at": now,
+        "signature": signature_hex_str
+            # STUDENT TO COMPLETE THIS...
+    }
+    urlSend(url,headers,payload)
+    
+def getUsers():   
+    global headers
+    url="http://cs302.kiwi.land/api/list_users" 
+    payload=""
+    data= urlSend(url,headers,payload)
+    print(data)
+    return data
     
 def authoriseUserLogin(username, password):
+    global headers
     print("Log on attempt from {0}:{1}".format(username, password))
     try:
         signing_key1=loadPrivateKeys()
@@ -391,7 +482,6 @@ def authoriseUserLogin(username, password):
         signature_hex_str = signed.signature.decode('utf-8')
         
         credentials = ('%s:%s' % (username, password))
-
         b64_credentials = base64.b64encode(credentials.encode('ascii'))
         headers = {
             'Authorization': 'Basic %s' % b64_credentials.decode('ascii'),
@@ -414,34 +504,7 @@ def authoriseUserLogin(username, password):
         
         
         """
-        url = "http://cs302.kiwi.land/api/rx_broadcast"
-        now = str(time.time())
-        message = "Hello world!"
-        message_bytes = bytes(Login_server_record_str+message+now, encoding='utf-8')
 
-
-        # Sign a message with the signing key
-        signed = signing_key1.sign(
-            message_bytes, encoder=nacl.encoding.HexEncoder)
-        signature_hex_str = signed.signature.decode('utf-8')
-        
-        payload = {
-            "loginserver_record":Login_server_record_str,
-            "message": message,
-            "sender_created_at": now,
-            "signature": signature_hex_str
-            # STUDENT TO COMPLETE THIS...
-        }
-        
-        req = urllib.request.Request(url, data=json.dumps(
-            payload).encode('utf-8'), headers=headers)
-        response = urllib.request.urlopen(req)
-        data = response.read()  # read the received bytes
-        # load encoding if possible (default to utf-8)
-        encoding = response.info().get_content_charset('utf-8')
-        response.close()
-        JSON_object = json.loads(data.decode(encoding))
-        print(JSON_object)
         """
         return 0
     except urllib.error.HTTPError as error:

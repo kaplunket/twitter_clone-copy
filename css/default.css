@@ -15,10 +15,12 @@ h3{
 h1{
     text-align:center;
 }
+
 test{
     color: #000000;
     text-decoration: bold;
     text-align: center;
+    margin-top: 0%;
     margin-right: 30%;
 }
   /* Style the navbar */
