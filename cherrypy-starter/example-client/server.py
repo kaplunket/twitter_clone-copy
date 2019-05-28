@@ -84,7 +84,7 @@ class MainApp(object):
     
     @cherrypy.expose
     def message(self):
-        Page = startHTML +LoginHeader +"<test>"
+        Page = startHTML +LoginHeader +"<test><h1>Public Messasging</h1>"
         Page += '<form autocomplete="off" action="/public" method="post" enctype="multipart/form-data">'
         Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
         Page += '<input type="submit" value="Submit"/></form>'
@@ -108,7 +108,7 @@ class MainApp(object):
     @cherrypy.expose
     def p2p(self,user=""):
         print(user)
-        Page = startHTML +LoginHeader +"<test>"
+        Page = startHTML +LoginHeader +"<test><h1>Private Messaging to:"+user+"</h1>"
         Page += '<form autocomplete="off" action="/private" method="post" enctype="multipart/form-data">'
         Page += '<input type="hidden" name="user" value=' + user + ' />'
         Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
@@ -297,7 +297,8 @@ def generatePublicKey(signing_key1):
     
 def ping(headers,pubkey_hex_str,signature_hex_str):
     """[Calls the ping api on the kiwiland login server,returns the
-    JSON recieved from the api ping call]
+    JSON recieved from the api ping call. Will not check to see if
+    the ping was successful]
     
     Arguments:
         headers {[dict]} -- [headers to be sent]
@@ -374,7 +375,6 @@ def report(headers, pubkey_hex_str):
         "connection_location": 1,
         "incoming_pubkey": pubkey_hex_str
     }
-    # TODO error handling
     urlSend(url, headers, payload)
 
 def getServerPubkey(headers):
@@ -394,6 +394,20 @@ def getServerPubkey(headers):
     return nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
     
 def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,username,privateKey):
+    """[Sends off a private message]
+    
+    Arguments:
+        headers {[dict]} -- [headers to be sent]
+        loginserver_record {[string]} -- [the login server record for the clients private-public key pair]
+        target_pubkey {[signingKey]} -- [the pubkey of the recipient]
+        target_user {[string]} -- [the username of the recipient]
+        message {[string]} -- [the message to be sent]
+        username {[string]} -- [the clients username]
+        privateKey {[verifyKey]} -- [the clients private key]
+    
+    Returns:
+        [boolean] -- [true on sucess, false on failiure]
+    """
     url = "http://cs302.kiwi.land/api/rx_privatemessage"
     now=str(time.time())
     publickey = target_pubkey.to_curve25519_public_key()
@@ -414,9 +428,17 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
           "sender_created_at" : now,  
           "signature" : signature_hex_str
     }
-    urlSend(url,headers,payload)
+    if (urlSend(url,headers,payload))['response']=='ok':
+        return True
+    else:
+        return False
   
 def publicMessage(message):
+    """[Sends a public message to the login server]
+    
+    Arguments:
+        message {[string]} -- [the message to be sent]
+    """
     global headers
     url = "http://cs302.kiwi.land/api/rx_broadcast"
     signing_key1=loadPrivateKeys()
@@ -452,6 +474,11 @@ def publicMessage(message):
     urlSend(url,headers,payload)
     
 def getUsers():   
+    """[gets a list of users from the login server]
+    
+    Returns:
+        [JSON] -- [a dict containing a single element 'users' which contains a list containing each users data in a dict]
+    """
     global headers
     url="http://cs302.kiwi.land/api/list_users" 
     payload=""
@@ -499,13 +526,6 @@ def authoriseUserLogin(username, password):
         privateMessage(headers,loginserver_record,target_pubkey,target_user,message,username,signing_key1)
         """
         #commented out to not send a message to the login server
-        
-        
-        
-        
-        """
-
-        """
         return 0
     except urllib.error.HTTPError as error:
         print(error.read())
