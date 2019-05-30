@@ -4,12 +4,24 @@ import time
 import urllib.request
 
 import cherrypy
-from asn1crypto.keys import PrivateKeyAlgorithm
-from Crypto.PublicKey.pubkey import pubkey
 import nacl.encoding
 import nacl.signing
 import nacl.utils
 from nacl.public import PrivateKey, Box
+
+"""
+import sqlite3
+conn = sqlite3.connect("my.db")
+#get the cursor (this is what we use to interact)
+c = conn.cursor() 
+#create table
+c.execute(""""""CREATE TABLE users
+
+            (id INTEGER PRIMARY KEY NOT NULL, username TEXT
+             UNIQUE, password TEXT, age INTEGER)"""""")
+conn.commit()
+conn.close()
+"""
 
 startHTML = """
 <html>
@@ -84,6 +96,8 @@ class MainApp(object):
     
     @cherrypy.expose
     def message(self):
+        if not checkLogin(self):
+            raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader +"<test><h1>Public Messasging</h1>"
         Page += '<form autocomplete="off" action="/public" method="post" enctype="multipart/form-data">'
         Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
@@ -95,6 +109,8 @@ class MainApp(object):
     @cherrypy.expose
     def private(self,user="",message=""):
         global headers
+        if not checkLogin(self):
+            raise cherrypy.HTTPRedirect('/')
         signing_key1=loadPrivateKeys()
         #seems to always make the same public key, no salt i guess
         verify_key1=generatePublicKey(signing_key1)
@@ -108,6 +124,8 @@ class MainApp(object):
     @cherrypy.expose
     def p2p(self,user=""):
         print(user)
+        if not checkLogin(self):
+            raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader +"<test><h1>Private Messaging to:"+user+"</h1>"
         Page += '<form autocomplete="off" action="/private" method="post" enctype="multipart/form-data">'
         Page += '<input type="hidden" name="user" value=' + user + ' />'
@@ -118,14 +136,9 @@ class MainApp(object):
         return Page
     
     @cherrypy.expose
-    def checkLogin(self):
-        try:
-            user=cherrypy.session['username']
-        except KeyError:
-            raise cherrypy.HTTPRedirect('/')
-    
-    @cherrypy.expose
     def users(self):
+        if not checkLogin(self):
+            raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader
         Page += """
             <ul>
@@ -143,6 +156,8 @@ class MainApp(object):
     
     @cherrypy.expose
     def public(self,message=""):
+        if not checkLogin(self):
+            raise cherrypy.HTTPRedirect('/')
         publicMessage(message)
         raise cherrypy.HTTPRedirect('/')
     
@@ -156,7 +171,7 @@ class MainApp(object):
     
     @cherrypy.expose
     def login(self, bad_attempt=0):
-        Page = startHTML+DefaultHeader
+        Page = startHTML+DefaultHeader+"<div id='login'>"
         if bad_attempt != 0:
             Page += "<font color='red'>Invalid username/password!</font>"
         Page += "<h1>Sign in to your account</h1>"
@@ -165,7 +180,7 @@ class MainApp(object):
         Page += 'Username: <input size="50" type="text" name="username"/><br/>'
         Page += 'Password: <input size="50" type="text" name="password"/><br/>'
         Page += '<input type="submit" value="Login"/></form>'
-        Page += "</b></test>"
+        Page += "</b></test></div>"
         Page += endHTML
         return Page
 
@@ -202,6 +217,23 @@ class MainApp(object):
 ###
 # Functions only after here
 ###
+
+def checkLogin(session):
+    """[Takes the current cherryPy instance and looks at th session to see if there is
+    a user loged in, returns true if there is atleast one user logged in]
+    
+    Arguments:
+        session {[cherryPy]} -- [the current cherrypy instance]
+    
+    Returns:
+        [bool] -- [true if user logged in, false if not]
+    """
+    try:
+        session.session['username']
+        return True
+    except:
+        return False
+
 def urlSend(url,headers,payload):
     """[takes a url, the relevant header data, and the payload
     and makes a request to the url with the provided headers
@@ -441,14 +473,12 @@ def publicMessage(message):
     """
     global headers
     url = "http://cs302.kiwi.land/api/rx_broadcast"
+    
     signing_key1=loadPrivateKeys()
         
     #seems to always make the same public key, no salt i guess
     verify_key1=generatePublicKey(signing_key1)
-    #signing_key = nacl.signing.SigningKey(hex_key, encoder=nacl.encoding.HexEncoder)
-    savePrivateKey(signing_key1.encode(encoder=nacl.encoding.HexEncoder),verify_key1.encode(encoder=nacl.encoding.HexEncoder))
-        
-        
+    
     # Serialize the verify key to send it to a third party
     pubkey_hex = verify_key1.encode(encoder=nacl.encoding.HexEncoder)
     pubkey_hex_str = pubkey_hex.decode('utf-8')
@@ -456,12 +486,11 @@ def publicMessage(message):
     now = str(time.time())
     username=cherrypy.session['username']
     Login_server_record_str=getLoginserverRecord(headers,username,pubkey_hex_str)
-    message_bytes = bytes(Login_server_record_str+message+now, encoding='utf-8')
-
+    
 
     # Sign a message with the signing key
-    signed = signing_key1.sign(
-        message_bytes, encoder=nacl.encoding.HexEncoder)
+    message_bytes = bytes(Login_server_record_str+message+now, encoding='utf-8')
+    signed = signing_key1.sign( message_bytes, encoder=nacl.encoding.HexEncoder)
     signature_hex_str = signed.signature.decode('utf-8')
         
     payload = {
@@ -485,6 +514,7 @@ def getUsers():
     data= urlSend(url,headers,payload)
     print(data)
     return data
+    
     
 def authoriseUserLogin(username, password):
     global headers
