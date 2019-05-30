@@ -8,9 +8,9 @@ import nacl.encoding
 import nacl.signing
 import nacl.utils
 from nacl.public import PrivateKey, Box
+import sqlite3
 
 """
-import sqlite3
 conn = sqlite3.connect("my.db")
 #get the cursor (this is what we use to interact)
 c = conn.cursor() 
