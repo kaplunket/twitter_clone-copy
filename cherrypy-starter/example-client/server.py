@@ -1,28 +1,23 @@
 import base64
 import json
+import sqlite3
+import threading
 import time
 import urllib.request
+from queue import Queue
+from threading import Event
 
 import cherrypy
+
 import nacl.encoding
 import nacl.signing
 import nacl.utils
-from nacl.public import PrivateKey, Box
-import sqlite3
-
-"""
-conn = sqlite3.connect("my.db")
-#get the cursor (this is what we use to interact)
-c = conn.cursor() 
-#create table
-c.execute(""""""CREATE TABLE users
-
-            (id INTEGER PRIMARY KEY NOT NULL, username TEXT
-             UNIQUE, password TEXT, age INTEGER)"""""")
-conn.commit()
-conn.close()
-"""
-
+from nacl.public import Box, PrivateKey
+e=threading.Event()
+user=""
+headers=""
+pubkey_hex_str=""
+logged_in=False
 startHTML = """
 <html>
     <head>
@@ -33,20 +28,82 @@ startHTML = """
 """
 DefaultHeader="""
             <div id="navbar">
+            <a href="/about">About</a>
             <a href="/">Home</a>
             <a href="/login">Login</a>
             </div><script src="default.js"></script>
             <div class="content">"""
 LoginHeader="""
             <div id="navbar">
+            <a href="/about">About</a>
             <a href="/">Home</a>
             <a href="/signout">Log Out</a>
             <a href="/message">Message</a>
             <a href="/users">Users</a>
+            <a href="/account">"""+user+"""</a>
             </div><script src="default.js"></script>
             <div class="content">"""
 endHTML="</div></body></html>"
-headers=""
+class ApiApp(object):
+    # CherryPy Configuration
+    _cp_config = {'tools.encode.on': True,
+                  'tools.encode.encoding': 'utf-8',
+                  'tools.sessions.on': 'True',
+                  'request.dispatch': cherrypy.dispatch.MethodDispatcher(),
+                  'tools.response_headers.on': True,
+                  'tools.response_headers.headers': [('Content-Type', 'application/json; charset=utf-8')],
+                  }
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def ping_check(self):
+        print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n YES1!!!!")
+        print()
+        
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def rx_broadcast(self):
+        print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n YES2!!!!")
+        print()
+        
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def rx_privatemessage(self,data="",headers=""):
+        print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n YES3!!!!")
+        data = cherrypy.request.json
+        print(headers,"\n\n|||||||||||||",data,"||||||||")
+        message=data['encrypted_message']
+        
+        VF=loadPrivateKeys()
+        PK = VF.to_curve25519_private_key()
+        box = nacl.public.SealedBox(PK)
+        message=box.decrypt(message.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
+        print(message)
+        
+        payload={ "response": "ok", "test":"lmao it works"}
+        return payload
+        
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def check_messages(self):
+        print()
+        
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def rx_groupmessage(self):
+        print()
+        
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def rx_groupinvite(self):
+        print()
+
 class MainApp(object):
 
         # CherryPy Configuration
@@ -82,21 +139,26 @@ class MainApp(object):
         return Page
     
     @cherrypy.expose
-    def home(self):
-        Page = startHTML + "Hi, this is a super secret extra webpage<br/>"
-
+    def about(self):
+        Page=startHTML
         try:
-            Page += "Hello " + cherrypy.session['username'] + "!<br/>"
-            Page += "I see that you have already logged in "
-        except KeyError:  # There is no username
-            Page += "I see that you have not yet logged in."
-        Page += "<a href='/'>Press to go back</a>"
+            user=cherrypy.session['username']
+            Page += LoginHeader
+            Page +=  "<h1>Hi there " + user + ", this is a website made by ksae900 for a compsys 302 assignment</h1><br/>"
+            Page += "Here is some bonus text because you've logged in! HERE IS SOME EXTRA TEXT AGAIN! <a href='/signout'>Sign out</a>"
+        except KeyError:
+            Page += DefaultHeader
+            Page +=  "<h1>Hi there, this is a website made by ksae900 for a compsys 302 assignment</h1><br/>"
+            Page += "Click here to <a href='login'>login</a>, alternatively use the button at the top."
+        Page += "<br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/>Some text down here to show scrolling</p>"
         Page += endHTML
         return Page
     
     @cherrypy.expose
     def message(self):
-        if not checkLogin(self):
+        try:
+            user=cherrypy.session['username']
+        except KeyError:
             raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader +"<test><h1>Public Messasging</h1>"
         Page += '<form autocomplete="off" action="/public" method="post" enctype="multipart/form-data">'
@@ -107,10 +169,12 @@ class MainApp(object):
         return Page
     
     @cherrypy.expose
-    def private(self,user="",message=""):
-        global headers
-        if not checkLogin(self):
+    def private(self,user="",pubkey="",address="",message=""):
+        try:
+            user=cherrypy.session['username']
+        except KeyError:
             raise cherrypy.HTTPRedirect('/')
+        global headers
         signing_key1=loadPrivateKeys()
         #seems to always make the same public key, no salt i guess
         verify_key1=generatePublicKey(signing_key1)
@@ -118,17 +182,22 @@ class MainApp(object):
         pubkey_hex = verify_key1.encode(encoder=nacl.encoding.HexEncoder)
         pubkey_hex_str = pubkey_hex.decode('utf-8')
         record=getLoginserverRecord(headers,cherrypy.session['username'],pubkey_hex_str)
-        privateMessage(headers,record,getServerPubkey(headers),user,message,cherrypy.session['username'],signing_key1)
+        target_pubkey=nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
+        privateMessage(headers,record,target_pubkey,user,message,cherrypy.session['username'],signing_key1)
         raise cherrypy.HTTPRedirect('/')
     
     @cherrypy.expose
-    def p2p(self,user=""):
-        print(user)
-        if not checkLogin(self):
+    def p2p(self,user="",pubkey="",address=""):
+        try:
+            user=cherrypy.session['username']
+        except KeyError:
             raise cherrypy.HTTPRedirect('/')
+        print(user)
         Page = startHTML +LoginHeader +"<test><h1>Private Messaging to:"+user+"</h1>"
         Page += '<form autocomplete="off" action="/private" method="post" enctype="multipart/form-data">'
         Page += '<input type="hidden" name="user" value=' + user + ' />'
+        Page += '<input type="hidden" name="pubkey" value=' + pubkey + ' />'
+        Page += '<input type="hidden" name="address" value=' + address + ' />'
         Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
         Page += '<input type="submit" value="Submit"/></form>'
         Page += "</test>"
@@ -137,7 +206,9 @@ class MainApp(object):
     
     @cherrypy.expose
     def users(self):
-        if not checkLogin(self):
+        try:
+            user=cherrypy.session['username']
+        except KeyError:
             raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader
         Page += """
@@ -148,7 +219,7 @@ class MainApp(object):
         Page += "<ul>"
         userList=getUsers()
         for i in userList["users"]:
-            Page +="""<li onclick="location.href = 'p2p?user=""" + i['username'] + """';">"""
+            Page +="""<li onclick="location.href = 'p2p?user=""" + i['username'] + "&pubkey="+ i['incoming_pubkey']+ "&address="+i['connection_address']+"""';">"""
             Page += i['username']+" Status: "+i['status']+" Connection address: "+i['connection_address'] 
             Page +='</li></br>'
         Page += "</ul>"
@@ -156,14 +227,16 @@ class MainApp(object):
     
     @cherrypy.expose
     def public(self,message=""):
-        if not checkLogin(self):
-            raise cherrypy.HTTPRedirect('/')
         publicMessage(message)
         raise cherrypy.HTTPRedirect('/')
     
     @cherrypy.expose
     def serverOffline(self):
-        Page = startHTML
+        try:
+            user=cherrypy.session['username']
+            Page = startHTML+LoginHeader
+        except KeyError:
+            Page = startHTML+DefaultHeader
         Page += "The login server is unavailable or down for maintainence, please try again later"
         Page += "<br> Sorry for the inconvenience, once we have been notified we will contact the server owner<br/>"
         Page += endHTML
@@ -172,11 +245,11 @@ class MainApp(object):
     @cherrypy.expose
     def login(self, bad_attempt=0):
         Page = startHTML+DefaultHeader+"<div id='login'>"
-        if bad_attempt != 0:
-            Page += "<font color='red'>Invalid username/password!</font>"
         Page += "<h1>Sign in to your account</h1>"
         Page += "<test><b>"
         Page += '<form action="/signin" method="post" enctype="multipart/form-data">'
+        if bad_attempt != 0:
+            Page += "<font color='red'>Invalid username/password!</font><br/>"
         Page += 'Username: <input size="50" type="text" name="username"/><br/>'
         Page += 'Password: <input size="50" type="text" name="password"/><br/>'
         Page += '<input type="submit" value="Login"/></form>'
@@ -192,11 +265,14 @@ class MainApp(object):
     # LOGGING IN AND OUT
     @cherrypy.expose
     def signin(self, username=None, password=None):
+        global logged_in
         """Check their name and password and send them either to the main page, or back to the main login screen."""
         error = authoriseUserLogin(username, password)
         if error == 0:
             cherrypy.session['username'] = username
             ##place to send when logged in
+            logged_in=True
+            worker()
             raise cherrypy.HTTPRedirect('/')
         elif error==2:
             raise cherrypy.HTTPRedirect('/serverOffline')
@@ -205,11 +281,18 @@ class MainApp(object):
 
     @cherrypy.expose
     def signout(self):
+        global logged_in
+        global t
+        global user
         """Logs the current user out, expires their session"""
         username = cherrypy.session.get('username')
+        user = username
         if username is None:
             pass
         else:
+            e.set()
+            logged_in=False
+            t.join()
             cherrypy.lib.sessions.expire()
         raise cherrypy.HTTPRedirect('/')
 
@@ -217,22 +300,6 @@ class MainApp(object):
 ###
 # Functions only after here
 ###
-
-def checkLogin(session):
-    """[Takes the current cherryPy instance and looks at th session to see if there is
-    a user loged in, returns true if there is atleast one user logged in]
-    
-    Arguments:
-        session {[cherryPy]} -- [the current cherrypy instance]
-    
-    Returns:
-        [bool] -- [true if user logged in, false if not]
-    """
-    try:
-        session.session['username']
-        return True
-    except:
-        return False
 
 def urlSend(url,headers,payload):
     """[takes a url, the relevant header data, and the payload
@@ -262,14 +329,7 @@ def urlSend(url,headers,payload):
         return JSON_object
     except urllib.error.HTTPError as error:
         print(error.read())
-        
-def checkPrivateKey():
-    """[This function will check for the private key
-    text file and return true if it exists and false if it
-    does not]
-    """
-    #TODO:
-
+    
 def loadPrivateKeys():
     """[This function will load the private key
         from the specific file path which has been predetermined.
@@ -292,7 +352,7 @@ def getPublicKeys():
     try:
         with open("PublicKey.txt",'rb') as file:
             data= file.read()
-        return nacl.signing.SigningKey(data, encoder=nacl.encoding.HexEncoder)
+        return nacl.signing.VerifyKey(data, encoder=nacl.encoding.HexEncoder)
     except:
         return ""
 
@@ -403,11 +463,13 @@ def report(headers, pubkey_hex_str):
     """
     url = "http://cs302.kiwi.land/api/report"
     payload = {
-        "connection_address": "127.0.0.1:8000",
+        "connection_address": "http://192.168.1.208:8000/",
         "connection_location": 1,
         "incoming_pubkey": pubkey_hex_str
     }
-    urlSend(url, headers, payload)
+    json=urlSend(url, headers, payload)
+    print(json)
+    return json
 
 def getServerPubkey(headers):
     """[Calls the getServerPubkey endpoint on the kiwiland login server and retrieves the
@@ -441,6 +503,10 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
         [boolean] -- [true on sucess, false on failiure]
     """
     url = "http://cs302.kiwi.land/api/rx_privatemessage"
+    url = "http://192.168.1.208:8000/api/rx_privatemessage"
+    url = "http://127.0.0.1:8000/api/rx_privatemessage"
+    #alt login server
+    #url = "http://210.54.33.182:80/api/rx_privatemessage"
     now=str(time.time())
     publickey = target_pubkey.to_curve25519_public_key()
     sealed_box = nacl.public.SealedBox(publickey)
@@ -473,6 +539,7 @@ def publicMessage(message):
     """
     global headers
     url = "http://cs302.kiwi.land/api/rx_broadcast"
+    url = "http://172.23.54.164:8000/api/rx_broadcast"
     
     signing_key1=loadPrivateKeys()
         
@@ -515,9 +582,31 @@ def getUsers():
     print(data)
     return data
     
+def send_private_data(): 
+    print()
+
+def recieve_private_data():
+    print()
+    
+def refresh_user():
+    global headers
+    global pubkey_hex_str
+    global logged_in
+    global e
+    while not e.wait(timeout=180):
+        report(headers,pubkey_hex_str)
+    
+def worker():
+    global t
+    global e
+    e.clear()
+    t=threading.Thread(target=refresh_user)
+    t.daemon=True
+    t.start()
     
 def authoriseUserLogin(username, password):
     global headers
+    global pubkey_hex_str
     print("Log on attempt from {0}:{1}".format(username, password))
     try:
         signing_key1=loadPrivateKeys()
@@ -546,20 +635,14 @@ def authoriseUserLogin(username, password):
         }
         ping(headers,pubkey_hex_str,signature_hex_str)
         #addPubkey(pubkey_hex_str,signature_hex_str,headers,username)'
-        report(headers,pubkey_hex_str)
-        """
-        loginserver_record=getLoginserverRecord(headers,username,pubkey_hex_str)
-        target_pubkey=getServerPubkey(headers)
-        message="This is a test"
-        target_user="admin"
-        
-        privateMessage(headers,loginserver_record,target_pubkey,target_user,message,username,signing_key1)
-        """
-        #commented out to not send a message to the login server
+        if report(headers,pubkey_hex_str)['response'] == 'error':
+            return 1
         return 0
     except urllib.error.HTTPError as error:
         print(error.read())
         exit()
+        return 1
+    except TypeError:
         return 1
     except urllib.error.URLError as error:
         return 2
