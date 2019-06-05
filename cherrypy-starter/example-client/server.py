@@ -8,11 +8,16 @@ from queue import Queue
 from threading import Event
 
 import cherrypy
+from Crypto.Cipher.CAST import key_size
 
+import nacl.bindings
 import nacl.encoding
+import nacl.pwhash
+import nacl.secret
 import nacl.signing
 import nacl.utils
 from nacl.public import Box, PrivateKey
+
 e=threading.Event()
 user=""
 headers=""
@@ -58,23 +63,25 @@ class ApiApp(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def ping_check(self):
-        print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n YES1!!!!")
-        print()
-        
+        payload={ "response": "ok", "my_time":str(time.time())}
+        return payload
+     
     @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def rx_broadcast(self):
         print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n YES2!!!!")
-        print()
+        data = cherrypy.request.json
+        message=data['message']
+        print(message)
+        payload={ "response": "ok", "test":"lmao it works"}
+        return payload
         
     @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def rx_privatemessage(self,data="",headers=""):
-        print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n YES3!!!!")
         data = cherrypy.request.json
-        print(headers,"\n\n|||||||||||||",data,"||||||||")
         message=data['encrypted_message']
         
         VF=loadPrivateKeys()
@@ -91,6 +98,8 @@ class ApiApp(object):
     @cherrypy.tools.json_in()
     def check_messages(self):
         print()
+        payload={ "response": "ok", "test":"lmao it works"}
+        return payload
         
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -188,7 +197,9 @@ class MainApp(object):
     
     @cherrypy.expose
     def p2p(self,user="",pubkey="",address=""):
-        try:
+        global headers
+        global pubkey_hex_str
+        try: 
             user=cherrypy.session['username']
         except KeyError:
             raise cherrypy.HTTPRedirect('/')
@@ -207,7 +218,7 @@ class MainApp(object):
     @cherrypy.expose
     def users(self):
         try:
-            user=cherrypy.session['username']
+            cherrypy.session['username']
         except KeyError:
             raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader
@@ -463,7 +474,7 @@ def report(headers, pubkey_hex_str):
     """
     url = "http://cs302.kiwi.land/api/report"
     payload = {
-        "connection_address": "http://192.168.1.208:8000/",
+        "connection_address": "172.23.46.106:1234",
         "connection_location": 1,
         "incoming_pubkey": pubkey_hex_str
     }
@@ -582,11 +593,58 @@ def getUsers():
     print(data)
     return data
     
-def send_private_data(): 
-    print()
+def send_private_data(headers,username): 
+    unique="test"
+    now=str(time.time())
+    prikeys=[]
+    prikeys.append(loadPrivateKeys().encode(encoder=nacl.encoding.HexEncoder).decode('utf-8'))
+    pubkey_hex_str=generatePublicKey(loadPrivateKeys()).encode(encoder=nacl.encoding.HexEncoder).decode('utf-8')
+    url="http://cs302.kiwi.land/api/add_privatedata" 
+    record=getLoginserverRecord(headers,username,pubkey_hex_str)
+                                            
+    pridata={   
+        "prikeys": prikeys,
+        "blocked_pubkeys": [],
+        "blocked_usernames": [],
+        "blocked_words": [],
+        "blocked_message_signatures": [],
+        "favourite_message_signatures": [],
+        "friends_usernames": []
+    }
+    pridata=base64.b64encode(json.dumps(pridata).encode('utf-8'))
+    
+    key=nacl.pwhash.argon2i.kdf(16,unique.encode('utf-8'),(unique*16).encode('utf-8')[:16],nacl.pwhash.argon2i.OPSLIMIT_SENSITIVE,nacl.pwhash.argon2i.MEMLIMIT_SENSITIVE,encoder=nacl.encoding.HexEncoder)
+    box = nacl.secret.SecretBox(key)
+    
+    nonce = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+
+    encrypted = (box.encrypt(pridata, nonce,encoder=nacl.encoding.HexEncoder)).decode('utf-8')
+    message_bytes = bytes(encrypted + record+now, encoding='utf-8')
+    signing_key1=loadPrivateKeys()
+    # Sign a message with the signing key
+    signed = signing_key1.sign(
+        message_bytes, encoder=nacl.encoding.HexEncoder)
+    signature_hex_str = signed.signature.decode('utf-8')
+    
+    payload={  
+            "privatedata": encrypted,
+            "loginserver_record": record,
+            "client_saved_at": now,
+            "signature": signature_hex_str
+    }
+    print(urlSend(url,headers,payload))
 
 def recieve_private_data():
-    print()
+    global headers
+    url="http://cs302.kiwi.land/api/get_privatedata" 
+    unique="test"
+    payload={}
+    JSON=urlSend(url,headers,payload)
+    key=nacl.pwhash.argon2i.kdf(16,unique.encode('utf-8'),(unique*16).encode('utf-8')[:16],nacl.pwhash.argon2i.OPSLIMIT_SENSITIVE,nacl.pwhash.argon2i.MEMLIMIT_SENSITIVE,encoder=nacl.encoding.HexEncoder)
+    box = nacl.secret.SecretBox(key)
+    plaintext = box.decrypt(JSON['privatedata'].encode('utf-8'),encoder=nacl.encoding.HexEncoder)
+    data=json.loads(base64.b64decode(plaintext).decode('utf-8'))
+    print(data)
     
 def refresh_user():
     global headers
@@ -635,14 +693,14 @@ def authoriseUserLogin(username, password):
         }
         ping(headers,pubkey_hex_str,signature_hex_str)
         #addPubkey(pubkey_hex_str,signature_hex_str,headers,username)'
+        send_private_data(headers,username)
+        recieve_private_data()
         if report(headers,pubkey_hex_str)['response'] == 'error':
             return 1
         return 0
     except urllib.error.HTTPError as error:
         print(error.read())
         exit()
-        return 1
-    except TypeError:
         return 1
     except urllib.error.URLError as error:
         return 2

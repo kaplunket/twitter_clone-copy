@@ -3,10 +3,10 @@ conn = sqlite3.connect("my.db")
 #get the cursor (this is what we use to interact)
 c = conn.cursor() 
 #create table
-#c.execute("""CREATE TABLE users
-
-#            (id INTEGER PRIMARY KEY NOT NULL, username TEXT
-#             UNIQUE, password TEXT, age INTEGER)""")
+#c.execute("""CREATE TABLE pubmessages
+#
+ #           (id INTEGER PRIMARY KEY NOT NULL, message TEXT
+#             , recieved_at TEXT, sender TEXT)""")
 #conn.commit()
 
 #TODO password should not be stored and keys should be stored instead, keys should be encrypted or something via password
@@ -16,11 +16,11 @@ c = conn.cursor()
 # we may not need to store anything?
 #private messages recieved should be stored encrypted, but all other stuff could be verified against the server
 #Hmmmm
-c.execute("INSERT INTO users (id,username,password,age)VALUES (4,'python','test',20)")
+c.execute("INSERT INTO pubmessages (id,message,recieved_at,sender)VALUES (1,'This is a test message','1559692079.2361557','ksae900')")
 #conn.commit()
 cur = conn.cursor()
-cur.execute("SELECT * FROM users")
- 
+cur.execute("SELECT * FROM pubmessages")
+
 rows = cur.fetchall()
 for row in rows:
     print(row)
