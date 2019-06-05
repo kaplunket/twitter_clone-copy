@@ -17,6 +17,8 @@ import nacl.secret
 import nacl.signing
 import nacl.utils
 from nacl.public import Box, PrivateKey
+import ast
+from subprocess import check_output
 
 e=threading.Event()
 user=""
@@ -70,10 +72,22 @@ class ApiApp(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def rx_broadcast(self):
-        print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n YES2!!!!")
         data = cherrypy.request.json
         message=data['message']
         print(message)
+        
+        conn = sqlite3.connect("my.db")
+        c = conn.cursor() 
+        
+        c.execute("""SELECT COUNT (*)  FROM pubmessages;""")
+        result=c.fetchone()
+        int(result[0])
+        
+        c.execute("INSERT INTO pubmessages (id,message,recieved_at,sender)VALUES (" +str(int(result[0])+1)+","+'"'+str(data)+'"'+",'"+str(time.time())+"',"+"'username'" +")")
+        conn.commit()
+            
+        conn.close()
+
         payload={ "response": "ok", "test":"lmao it works"}
         return payload
         
@@ -90,15 +104,51 @@ class ApiApp(object):
         message=box.decrypt(message.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
         print(message)
         
+        conn = sqlite3.connect("priv.db")
+        cur = conn.cursor() 
+        
+        cur.execute("""SELECT COUNT (*)  FROM privmessages;""")
+        result=cur.fetchone()
+        int(result[0])
+        
+        cur.execute("INSERT INTO privmessages (id,message,recieved_at,sender)VALUES (" +str(int(result[0])+1)+","+'"'+str(data)+'"'+",'"+str(time.time())+"',"+"'username'" +")")
+        conn.commit()
+            
+        conn.close()
+        
         payload={ "response": "ok", "test":"lmao it works"}
         return payload
         
     @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
-    def check_messages(self):
-        print()
-        payload={ "response": "ok", "test":"lmao it works"}
+    def check_messages(self,since="0"):
+        since=float(since)
+        pubmessages=[]
+        privmessages=[]
+        
+        conn = sqlite3.connect("my.db")
+        #get the cursor (this is what we use to interact)
+        cur = conn.cursor() 
+        cur.execute("SELECT * FROM pubmessages")
+        rows = cur.fetchall()
+        for row in rows:
+            if float((ast.literal_eval(row[1]))['sender_created_at'])>=since:
+                pubmessages.append(row[1])
+        print(pubmessages)
+        conn.close()
+        
+        c = sqlite3.connect("priv.db")
+        #get the cursor (this is what we use to interact)
+        cur = c.cursor() 
+        cur.execute("SELECT * FROM privmessages")
+        rows = cur.fetchall()
+        for row in rows:
+            if float((ast.literal_eval(row[1]))['sender_created_at'])>=since:
+                privmessages.append(row[1])
+        c.close()    
+        
+        payload={ "response": "ok", "broadcasts":pubmessages,"private_messages":privmessages}
         return payload
         
     @cherrypy.expose
@@ -180,10 +230,11 @@ class MainApp(object):
     @cherrypy.expose
     def private(self,user="",pubkey="",address="",message=""):
         try:
-            user=cherrypy.session['username']
+            cherrypy.session['username']
         except KeyError:
             raise cherrypy.HTTPRedirect('/')
         global headers
+        
         signing_key1=loadPrivateKeys()
         #seems to always make the same public key, no salt i guess
         verify_key1=generatePublicKey(signing_key1)
@@ -192,7 +243,8 @@ class MainApp(object):
         pubkey_hex_str = pubkey_hex.decode('utf-8')
         record=getLoginserverRecord(headers,cherrypy.session['username'],pubkey_hex_str)
         target_pubkey=nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
-        privateMessage(headers,record,target_pubkey,user,message,cherrypy.session['username'],signing_key1)
+        
+        privateMessage(headers,record,target_pubkey,user,message,signing_key1,address)
         raise cherrypy.HTTPRedirect('/')
     
     @cherrypy.expose
@@ -200,10 +252,9 @@ class MainApp(object):
         global headers
         global pubkey_hex_str
         try: 
-            user=cherrypy.session['username']
+            cherrypy.session['username']
         except KeyError:
             raise cherrypy.HTTPRedirect('/')
-        print(user)
         Page = startHTML +LoginHeader +"<test><h1>Private Messaging to:"+user+"</h1>"
         Page += '<form autocomplete="off" action="/private" method="post" enctype="multipart/form-data">'
         Page += '<input type="hidden" name="user" value=' + user + ' />'
@@ -222,11 +273,7 @@ class MainApp(object):
         except KeyError:
             raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader
-        Page += """
-            <ul>
-            <li onclick="location.href = 'p2p?user=admin';">Make A List Item Clickable</li>
-            </ul>
-            """
+
         Page += "<ul>"
         userList=getUsers()
         for i in userList["users"]:
@@ -263,6 +310,7 @@ class MainApp(object):
             Page += "<font color='red'>Invalid username/password!</font><br/>"
         Page += 'Username: <input size="50" type="text" name="username"/><br/>'
         Page += 'Password: <input size="50" type="text" name="password"/><br/>'
+        Page += 'Encryption Password: <input size="50" type="text" name="unique"/><br/>'
         Page += '<input type="submit" value="Login"/></form>'
         Page += "</b></test></div>"
         Page += endHTML
@@ -275,10 +323,10 @@ class MainApp(object):
 
     # LOGGING IN AND OUT
     @cherrypy.expose
-    def signin(self, username=None, password=None):
+    def signin(self, username=None, password=None,unique=None):
         global logged_in
         """Check their name and password and send them either to the main page, or back to the main login screen."""
-        error = authoriseUserLogin(username, password)
+        error = authoriseUserLogin(username, password,unique)
         if error == 0:
             cherrypy.session['username'] = username
             ##place to send when logged in
@@ -474,7 +522,7 @@ def report(headers, pubkey_hex_str):
     """
     url = "http://cs302.kiwi.land/api/report"
     payload = {
-        "connection_address": "172.23.46.106:1234",
+        "connection_address": get_ip()+":1234",
         "connection_location": 1,
         "incoming_pubkey": pubkey_hex_str
     }
@@ -498,7 +546,7 @@ def getServerPubkey(headers):
     pubkey = urlSend(url, headers, payload)["pubkey"]
     return nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
     
-def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,username,privateKey):
+def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,privateKey,address):
     """[Sends off a private message]
     
     Arguments:
@@ -507,7 +555,6 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
         target_pubkey {[signingKey]} -- [the pubkey of the recipient]
         target_user {[string]} -- [the username of the recipient]
         message {[string]} -- [the message to be sent]
-        username {[string]} -- [the clients username]
         privateKey {[verifyKey]} -- [the clients private key]
     
     Returns:
@@ -515,7 +562,8 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
     """
     url = "http://cs302.kiwi.land/api/rx_privatemessage"
     url = "http://192.168.1.208:8000/api/rx_privatemessage"
-    url = "http://127.0.0.1:8000/api/rx_privatemessage"
+    url = "http://127.0.0.1:1234/api/rx_privatemessage"
+    url = "http://"+address+"/api/rx_privatemessage"
     #alt login server
     #url = "http://210.54.33.182:80/api/rx_privatemessage"
     now=str(time.time())
@@ -550,7 +598,7 @@ def publicMessage(message):
     """
     global headers
     url = "http://cs302.kiwi.land/api/rx_broadcast"
-    url = "http://172.23.54.164:8000/api/rx_broadcast"
+    url = "http://127.0.0.1:1234/api/rx_broadcast"
     
     signing_key1=loadPrivateKeys()
         
@@ -593,8 +641,7 @@ def getUsers():
     print(data)
     return data
     
-def send_private_data(headers,username): 
-    unique="test"
+def send_private_data(headers,username,unique): 
     now=str(time.time())
     prikeys=[]
     prikeys.append(loadPrivateKeys().encode(encoder=nacl.encoding.HexEncoder).decode('utf-8'))
@@ -634,10 +681,8 @@ def send_private_data(headers,username):
     }
     print(urlSend(url,headers,payload))
 
-def recieve_private_data():
-    global headers
+def recieve_private_data(headers,unique):
     url="http://cs302.kiwi.land/api/get_privatedata" 
-    unique="test"
     payload={}
     JSON=urlSend(url,headers,payload)
     key=nacl.pwhash.argon2i.kdf(16,unique.encode('utf-8'),(unique*16).encode('utf-8')[:16],nacl.pwhash.argon2i.OPSLIMIT_SENSITIVE,nacl.pwhash.argon2i.MEMLIMIT_SENSITIVE,encoder=nacl.encoding.HexEncoder)
@@ -645,6 +690,12 @@ def recieve_private_data():
     plaintext = box.decrypt(JSON['privatedata'].encode('utf-8'),encoder=nacl.encoding.HexEncoder)
     data=json.loads(base64.b64decode(plaintext).decode('utf-8'))
     print(data)
+    
+def check_messages():
+    global headers
+    url="http://cs302.kiwi.land/api/check_messages?since=" 
+    payload={}
+    urlSend(url,headers,payload)
     
 def refresh_user():
     global headers
@@ -662,7 +713,14 @@ def worker():
     t.daemon=True
     t.start()
     
-def authoriseUserLogin(username, password):
+def get_ip():
+    #ip address extraction
+    ip_command = (check_output(["hostname","-I"]))
+    ip_string = ip_command.decode('utf-8')
+    ip_add = ip_string[0:len(ip_string)-2]
+    return(ip_add)
+    
+def authoriseUserLogin(username, password,unique):
     global headers
     global pubkey_hex_str
     print("Log on attempt from {0}:{1}".format(username, password))
@@ -693,8 +751,8 @@ def authoriseUserLogin(username, password):
         }
         ping(headers,pubkey_hex_str,signature_hex_str)
         #addPubkey(pubkey_hex_str,signature_hex_str,headers,username)'
-        send_private_data(headers,username)
-        recieve_private_data()
+        send_private_data(headers,username,unique)
+        recieve_private_data(headers,unique)
         if report(headers,pubkey_hex_str)['response'] == 'error':
             return 1
         return 0
