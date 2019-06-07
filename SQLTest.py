@@ -19,7 +19,7 @@ c = conn.cursor()
 #c.execute("""INSERT INTO pubmessages (id,message,recieved_at,sender)VALUES (3, '{  "loginserver_record": " error ",  "message": "Hello world!",  "sender_created_at" : "1556931977.0179243",  "signature" : " error"}','1559692079.2361557','ksae900')""")
 #conn.commit()
 cur = conn.cursor()
-cur.execute("SELECT * FROM privmessages")
+cur.execute("SELECT id,message,recieved_at,sender FROM privmessages")
 
 rows = cur.fetchall()
 for row in rows:
