@@ -17,6 +17,10 @@ p.c {
     word-break: break-all;
 }
 
+form.status {
+    display: inline-block; 
+}
+
 h1{
     text-align:center;
 }
