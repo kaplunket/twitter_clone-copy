@@ -17,7 +17,6 @@ import nacl.pwhash
 import nacl.secret
 import nacl.signing
 import nacl.utils
-from bs4 import BeautifulSoup
 from nacl.public import Box, PrivateKey
 from queue import Queue
 
@@ -86,6 +85,13 @@ class ApiApp(object):
         JSON=check_pubkey(headers,pubkey)
         print(JSON)
         if JSON['loginserver_record']==data['loginserver_record']:
+            verifykey=nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
+            decoded_sig=(data['loginserver_record']+message+data['sender_created_at']).encode('utf-8')
+            signature=data['signature'].encode('utf-8')
+            print("|",decoded_sig,"|")
+            print("|",signature,"|")
+            #verifykey.verify(decoded_sig,signature=(signature),encoder=nacl.encoding.HexEncoder)
+            
             conn = sqlite3.connect("my.db")
             c = conn.cursor() 
             
@@ -160,6 +166,7 @@ class ApiApp(object):
         for row in rows:
             if float((ast.literal_eval(row[1]))['sender_created_at'])>=since:
                 privmessages.append(ast.literal_eval(row[1]))
+
         c.close()    
         
         payload={ "response": "ok", "broadcasts":pubmessages,"private_messages":privmessages}
@@ -214,19 +221,32 @@ class MainApp(object):
             cur.execute("SELECT id,message,recieved_at,sender FROM pubmessages")
             array=[]
             rows = cur.fetchall()
+            
+            favourited=[]
+            blocked_broadcast={}
+            blocked_pubkeys={}
+            blocked_users={}
+            for row in rows:
+                temp=""
+                message=ast.literal_eval(row[1])['message']
+                if(message.find("!Meta:")!=-1):
+                    temp=message.split('!Meta:')[1]
+                    if temp.find('favourite_broadcast:[')!=-1:
+                        favourited.append(temp.split('favourite_broadcast:[')[1][:-1])
+                    elif temp.find('block_broadcast:[')!=-1:
+                        print()
+                    elif temp.find('block_pubkey:[')!=-1:
+                        print()
+                    elif temp.find('block_username:[')!=-1:
+                        print()
             for row in rows:
                 temp=""
                 message=ast.literal_eval(row[1])['message']
                 user = ast.literal_eval(row[1])['loginserver_record'].split(",")[0]
+                signature=ast.literal_eval(row[1])['signature']
                 if(message.find("!Meta:")==-1):
-                    VALID_TAGS = ['strong', 'em', 'ul', 'li', 'br','img','iframe']
-                    soup = BeautifulSoup(message)
-
-                    for tag in soup.findAll(True):
-                        if tag.name not in VALID_TAGS:
-                            tag.hidden = True
-                    cleaned_text=soup.renderContents().decode('utf-8')
                     
+                    cleaned_text=remove_HTML_tags(message)
                     temp1=cleaned_text
                     temp2=""
                     while not(cleaned_text.find('![') == -1):
@@ -246,20 +266,31 @@ class MainApp(object):
                         message=temp1
                     else:
                         message=temp2
+                    likes=0
+                    for i in favourited:
+                        if i==signature:
+                            likes=likes+1
+                    
+                                
                     if len(search)>0:
                         if not(user.find(search)==-1 and message.find(search)==-1):
                             temp +=  "<p><div id='messageHeading'><h3>"+user+"</h3>"
-                            temp += "</br><div id='message'><p class='c'word-break: break-all;>"+message+"</p></div></div><br/>"
+                            temp += "</br><div id='message'><p class='c'word-break: break-all;>"+message+"</p></div>Likes:"+str(likes)        
+                            temp += '<form autocomplete="off" action="/public" method="post" enctype="multipart/form-data">'
+                            temp += '<input type="hidden" name="message" value="!Meta:favourite_broadcast:['+signature+']' + ' "/>'
+                            temp += '<input type="submit" value="Like"/></form>'
                             array.append(temp)
                     else:
                         temp +=  "<p><div id='messageHeading'><h3>"+user+"</h3>"
-                        temp += "</br><div id='message'><p class='c'word-break: break-all;>"+message+"</p></div></div><br/>"
+                        temp += "</br><div id='message'><p class='c'word-break: break-all;>"+message+"</p></div>Likes:"+str(likes)                            
+                        temp += '<form autocomplete="off" action="/public" method="post" enctype="multipart/form-data">'
+                        temp += '<input type="hidden" name="message" value="!Meta:favourite_broadcast:['+signature+']' + '"/>'
+                        temp += '<input type="submit" value="Like"/></form>'
                         array.append(temp)
-                else:
-                    #Meta stuff here later
-                    print()
+
+
             for i in reversed(array):
-                Page += i
+                Page += i +"</div><br/>"
             conn.close()
             
         except KeyError:
@@ -299,13 +330,8 @@ class MainApp(object):
                     message=box.decrypt(message.encode('utf-8'), encoder=nacl.encoding.HexEncoder).decode('utf-8')
                     
                     if(message.find("!Meta:")==-1):
-                        VALID_TAGS = ['strong', 'em', 'ul', 'li', 'br','img','iframe']
-                        soup = BeautifulSoup(message)
-
-                        for tag in soup.findAll(True):
-                            if tag.name not in VALID_TAGS:
-                                tag.hidden = True
-                        cleaned_text=soup.renderContents().decode('utf-8')
+                        
+                        cleaned_text=remove_HTML_tags(message)
                                 
                         temp1=cleaned_text
                         temp2=""
@@ -376,7 +402,7 @@ class MainApp(object):
             raise cherrypy.HTTPRedirect('/')
         Page = startHTML +LoginHeader +"<test><h1>Public Messasging</h1>"
         Page += '<form autocomplete="off" action="/public" method="post" enctype="multipart/form-data">'
-        Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
+        Page += 'Message: <textarea placeholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
         Page += '<input type="submit" value="Submit"/></form>'
         Page += "</test>"
         Page += endHTML
@@ -398,7 +424,7 @@ class MainApp(object):
         pubkey_hex = verify_key1.encode(encoder=nacl.encoding.HexEncoder)
         pubkey_hex_str = pubkey_hex.decode('utf-8')
         record=getLoginserverRecord(headers,cherrypy.session['username'],pubkey_hex_str)
-        target_pubkey=nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
+        #target_pubkey=nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
         
         privateMessage(headers,record,target_pubkey,user,message,signing_key1,address)
         raise cherrypy.HTTPRedirect('/')
@@ -426,7 +452,7 @@ class MainApp(object):
                 Page += '<input type="hidden" name="user" value=' + user + ' />'
                 Page += '<input type="hidden" name="pubkey" value=' + pubkey + ' />'
                 Page += '<input type="hidden" name="address" value=' + address + ' />'
-                Page += 'Message: <textarea palceholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
+                Page += 'Message: <textarea placeholder="Type your message here" name="message" rows="3" cols="50" size="50" type="text"> </textarea><br/>'
                 Page += '<input type="submit" value="Submit"/></form>'
                 Page += "</test>"
         else:
@@ -450,24 +476,56 @@ class MainApp(object):
         Page = startHTML +LoginHeader
 
         Page += "<ul>"
+        
         userList=getUsers(headers)
         for i in userList["users"]:
             Page +="""<li onclick="location.href = 'p2p?user=""" + i['username'] + "&pubkey="+ i['incoming_pubkey']+ "&address="+i['connection_address']+"""';">"""
             Page += i['username']+" Status: "+i['status']+" Connection address: "+i['connection_address'] 
             Page +='</li></br>'
+            
         Page += "</ul>"
+        
         return Page
     
     @cherrypy.expose
     def public(self,message=""):
         headers=make_headers(cherrypy.session['username'],cherrypy.session['api_key'])
+        print(message)
         publicMessage(headers,message,cherrypy.session['prikey'])
+        raise cherrypy.HTTPRedirect('/')
+    
+    @cherrypy.expose
+    def account(self):
+        try:
+            cherrypy.session['username']
+        except KeyError:
+            raise cherrypy.HTTPRedirect('/')
+        header=make_headers(cherrypy.session['username'],cherrypy.session['api_key'])
+        data=recieve_private_data(header,cherrypy.session['unique'])
+        Page=startHTML+LoginHeader
+        Page+="<h1>Account: "+cherrypy.session['username']+"</h1>"
+        Page+="Status:<select oninput='update_status'><option value='online'>Online</option><option value='away'>Away</option><option value='offline'>Offline</option></select>"
+        Page+="Private Keys:"+data['prikeys']
+        Page+="Change encryption password:"
+        Page += '<form action="/change_encrypt" method="post" enctype="multipart/form-data">'
+        Page += 'Old: <input id="bar" size="50" type="text" name="old"/><br/>'
+        Page += 'New: <input id="bar" size="50" type="text" name="new"/><br/>'
+        Page += 'Repeat New: <input id="bar" size="50" type="text" name="new"/><br/>'
+        Page += '<input type="submit" value="Login"/></form>'
+        Page+="Clear private data:"
+        Page += '<form action="/" method="post" enctype="multipart/form-data">'
+        Page += '<input type="submit" value="CLEAR"/></form>'
+        Page+= endHTML
+        return Page
+    
+    @cherrypy.expose
+    def change_encrypt(self):
         raise cherrypy.HTTPRedirect('/')
     
     @cherrypy.expose
     def serverOffline(self):
         try:
-            user=cherrypy.session['username']
+            cherrypy.session['username']
             Page = startHTML+LoginHeader
         except KeyError:
             Page = startHTML+DefaultHeader
@@ -516,13 +574,14 @@ class MainApp(object):
             if pridata==-1:
                 raise cherrypy.HTTPRedirect('/login?bad_attempt=1')
             elif pridata==-2:
-                #no private data available
-                print()
+                pri_key=generatePrivateKey()
+                send_private_data(headers,username,unique,pri_key)
             else:
                 data=json.loads(pridata)
                 prikey=data['prikeys'][-1]
                 prikey=nacl.signing.SigningKey(prikey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
                 cherrypy.session['prikey']=prikey
+                cherrypy.session['unique']=unique
                 
                 #send_private_data(headers,username,unique,cherrypy.session['prikey'])
                 
@@ -634,6 +693,20 @@ def urlSend(url,headers,payload):
     
 #     #TODO:multiple filepaths needed if more than one private key is made
     
+def remove_HTML_tags(message):
+    allowed_tags=['strong', 'em', 'ul', 'li', 'br','img','iframe']
+    cleaned_message=""
+    if message.find('<')==-1:
+        return message
+    while message.find('<')!=-1:
+        cleaned_message+=message.split('<')[0]
+        message=message[message.find('<')+1:]
+        for i in allowed_tags:
+            if message.split('>')[0].find(i)!=-1:
+                cleaned_message+= "<"+message.split('>')[0]+">"
+        message=message[message.find('>')+1:]
+        
+    return cleaned_message
     
 def generatePrivateKey():
     """[To be used should there not be an existing private key.
@@ -731,7 +804,7 @@ def report(headers, pubkey_hex_str,status="online"):
     """
     url = "http://cs302.kiwi.land/api/report"
     payload = {
-        "connection_address": get_ip()+":8000",
+        "connection_address": get_ip()+":10055",
         "connection_location": 1,
         "incoming_pubkey": pubkey_hex_str,
         "status":status
@@ -771,8 +844,8 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
         [boolean] -- [true on sucess, false on failiure]
     """
     #url = "http://cs302.kiwi.land/api/rx_privatemessage"
-    #url = "http://192.168.1.208:8000/api/rx_privatemessage"
-    #url = "http://127.0.0.1:8000/api/rx_privatemessage"
+    #url = "http://192.168.1.208:10055/api/rx_privatemessage"
+    #url = "http://127.0.0.1:10055/api/rx_privatemessage"
     url = "http://"+address+"/api/rx_privatemessage"
     #alt login server
     #url = "http://210.54.33.182:80/api/rx_privatemessage"
@@ -783,7 +856,7 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
     now=str(time.time())
     publickey = target_pubkey.to_curve25519_public_key()
     sealed_box = nacl.public.SealedBox(publickey)
-    encrypted = sealed_box.encrypt(bytes(message,encoding='utf-8'), encoder=nacl.encoding.HexEncoder)
+    encrypted = sealed_box.encrypt(bytes(message[1:],encoding='utf-8'), encoder=nacl.encoding.HexEncoder)
     message_bytes = bytes(loginserver_record+target_pubkey.encode(encoder=nacl.encoding.HexEncoder).decode('utf-8')+target_user+encrypted.decode('utf-8') + now, encoding='utf-8')
 
     # Sign a message with the signing key
@@ -811,24 +884,13 @@ def publicMessage(headers,message,prikey):
     Arguments:
         message {[string]} -- [the message to be sent]
     """
-    #global q
-    url = "http://cs302.kiwi.land/api/rx_broadcast"
-    address_list = "http://127.0.0.1:8000/api/rx_broadcast"
     address_list=list_address(headers)
-    """
-    q = Queue()#creating the queue
-    for i in range(4):#number of threads
-        t = threading.Thread(target=worker1)#create thread???
-        t.daemon = True  # thread dies when main thread (only non-daemon thread) exits.
-        t.start()#start thread
-"""
-    #address_list=["172.23.103.37:1234"]
     for i in address_list:
         url="http://"+i+"/api/rx_broadcast"
         try:
             ping_check(headers,i)
         except urllib.error.URLError:
-            print()
+            continue
         signing_key1=prikey
             
         #seems to always make the same public key, no salt i guess
@@ -856,29 +918,18 @@ def publicMessage(headers,message,prikey):
                 # STUDENT TO COMPLETE THIS...
         }
         
+        print("|",message_bytes,"|")
         if not(i == "210.54.33.182:80"):
             try:
                 blank_headers={
                     'Content-Type': 'application/json; charset=utf-8',
                 }
-                "q.put([url,blank_headers,payload])"
                 urlSend(url,blank_headers,payload)
             except:
                 print()
         else:
             urlSend(url,headers,payload)
-    q.join()
-"""
-def worker1():
-    global q
-    while True:
-        item = q.get()#get a thing from a queue
-        try:
-            urlSend(item[0],item[1],item[2])#run the do_work def with the item in the queue
-        except:
-            print()
-        q.task_done()#complete the task
-"""
+
 
     
 def getUsers(headers):   
@@ -955,9 +1006,11 @@ def recieve_private_data(headers,unique):
     
 def list_address(headers):
     users=getUsers(headers)['users']
+    accepted_users=['ksae900','rgos933','gwon383','mpat750']
     output=[]
     for i in users:
-        output.append(i['connection_address'])
+        if i['username'] in accepted_users:
+            output.append(i['connection_address'])
     return output 
 
 def check_pubkey(headers,pub_key):
@@ -968,15 +1021,16 @@ def check_pubkey(headers,pub_key):
 def check_messages(headers):
     address=list_address(headers)
     temp=[]
+    print(address)
     for i in address:
-        if not (address == get_ip()+":8000"):
+        if not (i == get_ip()+":10055"):
             url="http://"+i+"/api/checkmessages?since=0" 
             payload={}
             try:
                 JSON=urlSend(url,headers,payload)
                 try:
-                    for i in JSON:
-                        temp.append(i)
+                    for j in JSON:
+                        temp.append(j)
                 except TypeError:
                     continue
                 try:
@@ -1020,7 +1074,7 @@ def get_ip():
     ip_command =check_output(["hostname","-I"])
     ip_string = ip_command.decode('utf-8')
     ip_add = ip_string[:len(ip_string)-2]
-    if ip_add.find(' '):
+    if not(ip_add.find(' ')==-1):
         ip_add=ip_add.split(' ')[0]
     return ip_add
     
@@ -1047,7 +1101,6 @@ def authoriseUserLogin(username,password,header,unique,prikey):
     headers=header
     print("Log on attempt from {0}:{1}".format(username, password))
     try:
-        
         signing_key1=prikey
         
         #seems to always make the same public key, no salt i guess
