@@ -788,6 +788,15 @@ class MainApp(object):
 ###
 
 def make_headers(username,api_key):
+    """Takes a username and an api_key and returns a header for authentication purposes
+    
+    Arguments:
+        username {[string]} -- [The users username]
+        api_key {[string]} -- [a current valid api key]
+    
+    Returns:
+        [JSON] -- [the headers]
+    """
     headers = {
         'X-username': username,
         'X-apikey': api_key,
@@ -824,25 +833,11 @@ def urlSend(url,headers,payload):
     except urllib.error.HTTPError as error:
         print(error.read())
     
-# def loadPrivateKeys():
-#     """[This function will load the private key
-#         from the specific file path which has been predetermined.
-#         If for whatever reason this function would fail it will return
-#         an empty string]
-#     """
-#     #TODO:
-#     try:
-#         with open("PrivateKey.txt",'rb') as file:
-#             data= file.read()
-#         return nacl.signing.SigningKey(data, encoder=nacl.encoding.HexEncoder)
-#     except:
-#         return ""
 
 def loadTime():
-     """[This function will attempt to get saved 
-         public keys from the login server]
+     """[This function will attempt to get the saved 
+        time from the text file]
      """
-     ## TODO:figure out what to do about certificates
      try:
          with open("time.txt",'r') as file:
              data= file.read()
@@ -851,15 +846,20 @@ def loadTime():
          return ""
 
 def saveTime():
-     """[This function will save the private key that is currently in use
-         returns a false if unsuccessful]
+     """[This function will save the last time a broadcast was recieved]
      """
      with open("time.txt",'w') as file:
          file.write(str(time.time()))
     
-#     #TODO:multiple filepaths needed if more than one private key is made
-    
 def remove_HTML_tags(message):
+    """[Removes invalid HTML tags from a string]
+    
+    Arguments:
+        message {[string]} -- [the input string]
+    
+    Returns:
+        [string] -- [the cleaned string]
+    """
     allowed_tags=['strong', 'em', 'ul', 'li', 'br','img','iframe']
     cleaned_message=""
     if message.find('<')==-1:
@@ -878,8 +878,6 @@ def generatePrivateKey():
     """[To be used should there not be an existing private key.
         Takes no inputs but return a nacl.signing key]
     """
-    #TODO
-    # Generate a new random signing key
     return nacl.signing.SigningKey.generate()
 
 def generatePublicKey(signing_key1):
@@ -967,6 +965,7 @@ def report(headers, pubkey_hex_str,status="online"):
     Arguments:
         headers {[dict]} -- [headers to be sent]
         pubkey_hex_str {[string]} -- [pubkey encoded in hex, decoded in utf-8]
+        status  {[string]}  --  [a string containing the users status, this is an optional argument and will default to online if not provided]
     """
     url = "http://cs302.kiwi.land/api/report"
     payload = {
@@ -1004,6 +1003,7 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
         target_user {[string]} -- [the username of the recipient]
         message {[string]} -- [the message to be sent]
         privateKey {[verifyKey]} -- [the clients private key]
+        address {[string]}  --  [the address of the recipient]
     
     Returns:
         [boolean] -- [true on sucess, false on failiure]
@@ -1058,7 +1058,9 @@ def publicMessage(headers,message,prikey):
     """[Sends a public message to the login server]
     
     Arguments:
+        headers {[JSON]}  --  [The authentication headers]
         message {[string]} -- [the message to be sent]
+        prikey  {[SigningKey]}  --  [the current signing key in use]
     """
     address_list=list_address(headers)
     for i in address_list:
@@ -1118,6 +1120,20 @@ def getUsers(headers):
     return data
     
 def send_private_data(headers,username,unique,prikeys,pubkeys,b_username,words,b_signature,f_signature,f_username): 
+    """Save the users private data
+    
+    Arguments:
+        headers {[JSON]} -- [the authentication headers]
+        username {[string]} -- [the current users username]
+        unique {[string]} -- [the unique encryption password]
+        prikeys {[list]} -- [the list of the users private keys]
+        pubkeys {[list]} -- [the list of the users blocked public keys]
+        b_username {[list]} -- [the list of the users blocked usernames]
+        words {[list]} -- [the list of the users blocked words]
+        b_signature {[list]} -- [the list of the users blocked signatures]
+        f_signature {[list]} -- [the list of the users favourited signatures]
+        f_username {[list]} -- [the list of the users favourited usernames]
+    """
     now=str(time.time())
     pubkey_hex_str=generatePublicKey(prikeys[-1]).encode(encoder=nacl.encoding.HexEncoder).decode('utf-8')
     url="http://cs302.kiwi.land/api/add_privatedata" 
@@ -1160,6 +1176,15 @@ def send_private_data(headers,username,unique,prikeys,pubkeys,b_username,words,b
     urlSend(url,headers,payload)
 
 def recieve_private_data(headers,unique):
+    """[This will retrieve the users saved private data]
+    
+    Arguments:
+        headers {[JSON]} -- [the authentication headers]
+        unique {[string]} -- [the unique encryption password]
+    
+    Returns:
+        [dict] -- [a dictionary containing the private data]
+    """
     if len(unique)==0:
         return ""
     url="http://cs302.kiwi.land/api/get_privatedata" 
@@ -1180,6 +1205,14 @@ def recieve_private_data(headers,unique):
     return data
     
 def list_address(headers):
+    """[List the available address's]
+    
+    Arguments:
+        headers {[JSON]} -- [the authentication headers]
+    
+    Returns:
+        [list] -- [a list of IP's]
+    """
     users=getUsers(headers)['users']
     accepted_users=['ksae900','rgos933','gwon383','mpat750']
     output=[]
@@ -1189,11 +1222,25 @@ def list_address(headers):
     return output 
 
 def check_pubkey(headers,pub_key):
+    """[returns the loginserver_record for a given pubkey]
+    
+    Arguments:
+        headers {[JSON]} -- [the authentication headers]
+        pub_key {[String]} -- [the pubkey to verify]
+    
+    Returns:
+        [dict] -- [the loginserver_record]
+    """
     url="http://cs302.kiwi.land/api/check_pubkey?pubkey="+pub_key 
     payload={}
     return urlSend(url,headers,payload)
 
 def check_messages(headers):
+    """[Calls the checkmessages api on other clients]
+    
+    Arguments:
+        headers {[JSON]} -- [the authentication headers]
+    """
     address=list_address(headers)
     public=[]
     private=[]
@@ -1240,6 +1287,15 @@ def check_messages(headers):
     
     
 def ping_check(headers,address):
+    """[Performs a ping check on the address provided]
+    
+    Arguments:
+        headers {[JSON]} -- [the authentication headers]
+        address {[string]} -- [the ip address of the target]
+    
+    Returns:
+        [JSON] -- [the response from the ping check]
+    """
     url="http://"+address+"/api/ping_check"
     payload={  
             "my_time": str(time.time()),
@@ -1248,6 +1304,8 @@ def ping_check(headers,address):
     return urlSend(url,headers,payload)
     
 def refresh_user():
+    """[The target for the thread which keeps a user active]
+    """
     global headers
     global pubkey_hex_str
     global e
@@ -1259,6 +1317,11 @@ def refresh_user():
             report(headers,pubkey_hex_str,statuses[i][1])
     
 def worker():
+    """[The thread constructor function]
+    
+    Returns:
+        [Thread] -- [the thread]
+    """
     global e
     e.clear()
     t=threading.Thread(target=refresh_user)
@@ -1267,6 +1330,11 @@ def worker():
     return t
     
 def get_ip():
+    """[gets the machine ip]
+    
+    Returns:
+        [string] -- [the machines ip]
+    """
     #ip address extraction
     ip_command =check_output(["hostname","-I"])
     ip_string = ip_command.decode('utf-8')
@@ -1276,6 +1344,15 @@ def get_ip():
     return ip_add
     
 def get_apikey(username,password):
+    """[Gets the API key for a user given appropriate authentication]
+    
+    Arguments:
+        username {[string]} -- [the users username]
+        password {[string]} -- [the users password]
+    
+    Returns:
+        [string] -- [the API key for the session]
+    """
     url="http://cs302.kiwi.land/api/load_new_apikey" 
     credentials = ('%s:%s' % (username, password))
     b64_credentials = base64.b64encode(credentials.encode('ascii'))
@@ -1292,6 +1369,18 @@ def get_apikey(username,password):
     return key
     
 def authoriseUserLogin(username,password,header,unique,prikey):
+    """[Authorise the user with the login server]
+    
+    Arguments:
+        username {[string]} -- [the users username]
+        password {[string]} -- [the asscociated password]
+        header {[JSON]} -- [the authentication header]
+        unique {[string]} -- [the unique encryption password]
+        prikey {[SigningKey]} -- [the users private key]
+    
+    Returns:
+        [int] -- [the code corresponding to the result, 0=OK,1=Bad login,2=no connection]
+    """
     global headers
     global pubkey_hex_str
     headers=header
