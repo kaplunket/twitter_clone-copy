@@ -91,8 +91,6 @@ class ApiApp(object):
                 verifykey=nacl.signing.VerifyKey(pubkey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
                 decoded_sig=(data['loginserver_record']+message+data['sender_created_at']).encode('utf-8')
                 signature=data['signature'].encode('utf-8')
-                print("|",decoded_sig,"|")
-                print("|",signature,"|")
                 #verifykey.verify(decoded_sig,signature=(signature),encoder=nacl.encoding.HexEncoder)
                 
                 conn = sqlite3.connect("my.db")
@@ -239,9 +237,6 @@ class MainApp(object):
             rows = cur.fetchall()
             
             favourited=[]
-            blocked_broadcast={}
-            blocked_pubkeys={}
-            blocked_users=cherrypy.session['blocked_usernames']
             for row in rows:
                 temp=""
                 message=ast.literal_eval(row[1])['message']
@@ -412,9 +407,6 @@ class MainApp(object):
                             temp += "</br><div id='message'><p class='c'word-break: break-all;>"+message+"</p></div>"
                             temp += "<a href=p2p?user="+ user+"&pubkey="+ pubkey+"&address=*>Reply</a>"+"</div><br/>"
                             array.append(temp)
-                    else:
-                        #META stuff
-                        print()
                 except:
                     continue
             conn.close()
@@ -538,7 +530,6 @@ class MainApp(object):
     @cherrypy.expose
     def public(self,message=""):
         headers=make_headers(cherrypy.session['username'],cherrypy.session['api_key'])
-        print(message)
         publicMessage(headers,message,cherrypy.session['prikey'])
         raise cherrypy.HTTPRedirect('/')
     
@@ -689,12 +680,7 @@ class MainApp(object):
         Page += "</b></test></div>"
         Page += endHTML
         return Page
-
-    @cherrypy.expose
-    def sum(self, a=0, b=0):  # All inputs are strings by default
-        output = int(a)+int(b)
-        return str(output)
-
+    
     # LOGGING IN AND OUT
     @cherrypy.expose
     def signin(self, username=None, password=None,unique=None):
@@ -1022,12 +1008,12 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
     Returns:
         [boolean] -- [true on sucess, false on failiure]
     """
-    #url = "http://cs302.kiwi.land/api/rx_privatemessage"
-    #url = "http://192.168.1.208:10050/api/rx_privatemessage"
-    #url = "http://127.0.0.1:10050/api/rx_privatemessage"
+    alt=False
+    try:
+        ping_check(headers,address)
+    except:
+        alt=True
     url = "http://"+address+"/api/rx_privatemessage"
-    #alt login server
-    #url = "http://210.54.33.182:80/api/rx_privatemessage"
     if not(target_user =='admin'):
         headers={
             'Content-Type': 'application/json; charset=utf-8',
@@ -1051,6 +1037,15 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
           "sender_created_at" : now,  
           "signature" : signature_hex_str
     }
+    array=list_address(headers)
+    for i in array:
+        try:
+            ping_check(headers,i)
+            address=i
+            break
+        except:
+            continue
+    url = "http://"+address+"/api/rx_privatemessage"
     try:
         if (urlSend(url,headers,payload))['response']=='ok':
             return True
@@ -1099,7 +1094,6 @@ def publicMessage(headers,message,prikey):
                 # STUDENT TO COMPLETE THIS...
         }
         
-        print("|",message_bytes,"|")
         if not(i == "210.54.33.182:80"):
             try:
                 blank_headers={
@@ -1190,7 +1184,7 @@ def list_address(headers):
     accepted_users=['ksae900','rgos933','gwon383','mpat750']
     output=[]
     for i in users:
-        if i['username'] in accepted_users:
+        if i['username'] in accepted_users and i['connection_location']=="0":
             output.append(i['connection_address'])
     return output 
 
@@ -1207,7 +1201,6 @@ def check_messages(headers):
     for i in address:
         if not (i == get_ip()+":10050"):
             url="http://"+i+"/api/checkmessages?since="+loadTime()
-            print(url,"\n\n\n\n\\n\\\n\n\n\nn\\n\n\n\n\\nn\n\n")
             payload={}
             try:
                 JSON=urlSend(url,headers,payload)
@@ -1220,11 +1213,7 @@ def check_messages(headers):
                 except TypeError:
                     continue
             except:
-                print("ERROR\n")
                 continue
-    
-    #public = list(OrderedDict.fromkeys(public))
-    #private = list(OrderedDict.fromkeys(private))
     
     conn = sqlite3.connect("priv.db")
     cur = conn.cursor() 
@@ -1255,8 +1244,8 @@ def ping_check(headers,address):
     payload={  
             "my_time": str(time.time()),
             "connection_address": get_ip(),  
-            "connection_location": 2}
-    urlSend(url,headers,payload)
+            "connection_location": 1}
+    return urlSend(url,headers,payload)
     
 def refresh_user():
     global headers
@@ -1305,7 +1294,6 @@ def get_apikey(username,password):
 def authoriseUserLogin(username,password,header,unique,prikey):
     global headers
     global pubkey_hex_str
-    print(header)
     headers=header
     print("Log on attempt from {0}:{1}".format(username, password))
     try:
