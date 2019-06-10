@@ -5,6 +5,8 @@ import sqlite3
 import threading
 import time
 import urllib.request
+from collections import OrderedDict
+from email.header import make_header
 from queue import Queue
 from subprocess import check_output
 from threading import Event
@@ -18,8 +20,7 @@ import nacl.secret
 import nacl.signing
 import nacl.utils
 from nacl.public import Box, PrivateKey
-from queue import Queue
-from collections import OrderedDict
+
 statuses={}
 e=threading.Event()
 user=""
@@ -43,7 +44,7 @@ DefaultHeader="""
 LoginHeader="""
             <div id="navbar">
             <a href="/about">About</a>
-            <a href="/">Home</a>
+            <a href="/">Public</a>
             <a href="/private_messages">PM's</a>
             <a href="/signout">Log Out</a>
             <a href="/message">Message</a>
@@ -153,32 +154,36 @@ class ApiApp(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def checkmessages(self,since="0"):
-        since=float(since)
-        pubmessages=[]
-        privmessages=[]
-        
-        conn = sqlite3.connect("my.db")
-        #get the cursor (this is what we use to interact)
-        cur = conn.cursor() 
-        cur.execute("SELECT id,message,recieved_at,sender FROM pubmessages")
-        rows = cur.fetchall()
-        for row in rows:
-            if float((ast.literal_eval(row[1]))['sender_created_at'])>=since:
-                pubmessages.append(ast.literal_eval(row[1]))
-        conn.close()
-        
-        c = sqlite3.connect("priv.db")
-        #get the cursor (this is what we use to interact)
-        cur = c.cursor() 
-        cur.execute("SELECT id,message,recieved_at,sender FROM privmessages")
-        rows = cur.fetchall()
-        for row in rows:
-            if float((ast.literal_eval(row[1]))['sender_created_at'])>=since:
-                privmessages.append(ast.literal_eval(row[1]))
+        try:
+            since=float(since)
+            pubmessages=[]
+            privmessages=[]
+            
+            conn = sqlite3.connect("my.db")
+            #get the cursor (this is what we use to interact)
+            cur = conn.cursor() 
+            cur.execute("SELECT id,message,recieved_at,sender FROM pubmessages")
+            rows = cur.fetchall()
 
-        c.close()    
-        
-        payload={ "response": "ok", "broadcasts":pubmessages,"private_messages":privmessages}
+            for row in rows:
+                if float((ast.literal_eval(row[1]))['sender_created_at'])>=since:
+                    pubmessages.append(ast.literal_eval(row[1]))
+            conn.close()
+            
+            c = sqlite3.connect("priv.db")
+            #get the cursor (this is what we use to interact)
+            cur = c.cursor() 
+            cur.execute("SELECT id,message,recieved_at,sender FROM privmessages")
+            rows = cur.fetchall()
+            for row in rows:
+                if float((ast.literal_eval(row[1]))['sender_created_at'])>=since:
+                    privmessages.append(ast.literal_eval(row[1]))
+
+            c.close()    
+            
+            payload={ "response": "ok", "broadcasts":pubmessages,"private_messages":privmessages}
+        except ValueError:
+            payload={"response": "error",'message':'Invalid data type'}
         return payload
         
     @cherrypy.expose
@@ -236,7 +241,7 @@ class MainApp(object):
             favourited=[]
             blocked_broadcast={}
             blocked_pubkeys={}
-            blocked_users={}
+            blocked_users=cherrypy.session['blocked_usernames']
             for row in rows:
                 temp=""
                 message=ast.literal_eval(row[1])['message']
@@ -281,7 +286,22 @@ class MainApp(object):
                     for i in favourited:
                         if i==signature:
                             likes=likes+1
-                    
+                    block=False
+                    for i in cherrypy.session['blocked_usernames']:
+                        if user==i:
+                            block=True
+                    for i in cherrypy.session['blocked_words']:
+                        if message.find(i)!=-1:
+                            block=True
+                    for i in cherrypy.session['blocked_pubkeys']:
+                        if pubkey==i:
+                            block=True
+                    for i in cherrypy.session['blocked_message_signatures']:
+                        if signature==i:
+                            block=True
+                    if block:
+                        continue    
+                        
                                 
                     if len(search)>0:
                         if not(user.find(search)==-1 and message.find(search)==-1):
@@ -334,6 +354,7 @@ class MainApp(object):
                 message=ast.literal_eval(row[1])['encrypted_message']
                 user = ast.literal_eval(row[1])['loginserver_record'].split(",")[0]
                 pubkey=ast.literal_eval(row[1])['loginserver_record'].split(",")[1]
+                signature=ast.literal_eval(row[1])['signature']
                 try:
                     VF=cherrypy.session['prikey']
                     PK = VF.to_curve25519_private_key()
@@ -363,6 +384,22 @@ class MainApp(object):
                             message=temp1
                         else:
                             message=temp2
+                            
+                        block=False
+                        for i in cherrypy.session['blocked_usernames']:
+                            if user==i:
+                                block=True
+                        for i in cherrypy.session['blocked_words']:
+                            if message.find(i)!=-1:
+                                block=True
+                        for i in cherrypy.session['blocked_pubkeys']:
+                            if pubkey==i:
+                                block=True
+                        for i in cherrypy.session['blocked_message_signatures']:
+                            if signature==i:
+                                block=True
+                        if block:
+                            continue    
                             
                         if len(search)>0:
                             if not(user.find(search)==-1 and message.find(search)==-1):
@@ -513,6 +550,10 @@ class MainApp(object):
             raise cherrypy.HTTPRedirect('/')
         header=make_headers(cherrypy.session['username'],cherrypy.session['api_key'])
         data=json.loads(recieve_private_data(header,cherrypy.session['unique']))
+        cherrypy.session['keylist']=data['prikeys']
+        for i in range(0,len(cherrypy.session['keylist'])):
+            cherrypy.session['keylist'][i]=nacl.signing.SigningKey(bytes(cherrypy.session['keylist'][i], encoding='utf-8'),encoder=nacl.encoding.HexEncoder)
+                
         Page=startHTML+LoginHeader
         Page+="<h1>Account: "+cherrypy.session['username']+"</h1>"
         Page+="Status:"
@@ -525,9 +566,43 @@ class MainApp(object):
         Page+="<form class='status' action='/change_status?status=offline' method='post' enctype='multipart/form-data'>"
         Page += '<input type="submit" value="Offline"/></form>'
         Page+="<br/>Private Keys:<ul>"
-        for i in data['prikeys']:
+        for i in cherrypy.session['keylist']:
+            Page+="<li>"+i.encode(encoder=nacl.encoding.HexEncoder).decode('utf-8')+"</li>"
+        Page+="</ul>"
+        Page += '<form action="/clear_blocked_data" method="post" enctype="multipart/form-data">'
+        Page += '<input type="submit" value="CLEAR BLOCK DATA"/></form>'
+        Page+="Blocked username:<ul>"
+        for i in cherrypy.session['blocked_usernames']:
             Page+="<li>"+i+"</li>"
         Page+="</ul>"
+        Page+="Block username:"
+        Page += '<form action="/add_blocked_username" method="post" enctype="multipart/form-data">'
+        Page += 'New: <input id="bar" size="20" type="text" name="block"/><br/>'
+        Page += '<input type="submit" value="Submit"/></form>'
+        Page+="Blocked pubkeys:<ul>"
+        for i in cherrypy.session['blocked_pubkeys']:
+            Page+="<li>"+i+"</li>"
+        Page+="</ul>"
+        Page+="Block pubkey:"
+        Page += '<form action="/add_blocked_username" method="post" enctype="multipart/form-data">'
+        Page += 'New: <input id="bar" size="20" type="text" name="pubkey"/><br/>'
+        Page += '<input type="submit" value="Submit"/></form>'
+        Page+="Blocked words:<ul>"
+        for i in cherrypy.session['blocked_words']:
+            Page+="<li>"+i+"</li>"
+        Page+="</ul>"
+        Page+="Block words:"
+        Page += '<form action="/add_blocked_username" method="post" enctype="multipart/form-data">'
+        Page += 'New: <input id="bar" size="20" type="text" name="words"/><br/>'
+        Page += '<input type="submit" value="Submit"/></form>'
+        Page+="Blocked signatures:<ul>"
+        for i in cherrypy.session['blocked_message_signatures']:
+            Page+="<li>"+i+"</li>"
+        Page+="</ul>"
+        Page+="Block signature:"
+        Page += '<form action="/add_blocked_username" method="post" enctype="multipart/form-data">'
+        Page += 'New: <input id="bar" size="20" type="text" name="sign"/><br/>'
+        Page += '<input type="submit" value="Submit"/></form>'
         Page+="Change encryption password:"
         Page += '<form action="/change_encrypt" method="post" enctype="multipart/form-data">'
         Page += 'New: <input id="bar" size="20" type="text" name="new"/><br/>'
@@ -539,19 +614,50 @@ class MainApp(object):
         return Page
     
     @cherrypy.expose
+    def add_blocked_username(self,block="",pubkey="",sign="",words=""):
+        try:
+            cherrypy.session['username']
+            if len(block)>0:
+                cherrypy.session['blocked_usernames'].append(block)
+            if len(pubkey)>0:
+                cherrypy.session['blocked_pubkeys'].append(pubkey)
+            if len(sign)>0:
+                cherrypy.session['blocked_message_signatures'].append(sign)
+            if len(words)>0:
+                cherrypy.session['blocked_words'].append(words)
+            send_private_data(headers,cherrypy.session['username'],cherrypy.session['unique'],cherrypy.session['keylist'],cherrypy.session['blocked_pubkeys'],cherrypy.session['blocked_usernames'],cherrypy.session['blocked_words'],cherrypy.session['blocked_message_signatures'],cherrypy.session['favourite_message_signatures'],cherrypy.session['friends_usernames'])
+            raise cherrypy.HTTPRedirect('/account')
+        except KeyError:
+            raise cherrypy.HTTPRedirect('/')
+
+    @cherrypy.expose
+    def clear_blocked_data(self):
+        send_private_data(headers,cherrypy.session['username'],cherrypy.session['unique'],cherrypy.session['keylist'],[],[],[],[],cherrypy.session['favourite_message_signatures'],cherrypy.session['friends_usernames'])
+        cherrypy.session['blocked_pubkeys']=[]
+        cherrypy.session['blocked_usernames']=[]
+        cherrypy.session['blocked_words']=[]
+        cherrypy.session['blocked_message_signatures']=[]
+        cherrypy.session['favourite_message_signatures']=[]
+        cherrypy.session['friends_usernames']=[]
+        raise cherrypy.HTTPRedirect('/account')
+        
+    @cherrypy.expose
     def change_encrypt(self,new=""):
         if new=="":
             raise cherrypy.HTTPRedirect('/account')
         
         make_headers(cherrypy.session['username'],cherrypy.session['api_key'])
-        send_private_data(headers,cherrypy.session['username'],cherrypy.session['unique'],cherrypy.session['prikey'])
-
+        send_private_data(headers,cherrypy.session['username'],new,cherrypy.session['keylist'],cherrypy.session['blocked_pubkeys'],cherrypy.session['blocked_usernames'],cherrypy.session['blocked_words'],cherrypy.session['blocked_message_signatures'],cherrypy.session['favourite_message_signatures'],cherrypy.session['friends_usernames'])
+        cherrypy.session['unique']=new
         raise cherrypy.HTTPRedirect('/account')
     
     @cherrypy.expose
     def change_status(self,status="online"):
         global statuses
         statuses[cherrypy.session['username']]=[statuses[cherrypy.session['username']][0],status]
+        #headers = make_header( cherrypy.session['username'] , statuses[cherrypy.session['username']][0] )
+        #pubkey_hex_str=bytes(generatePublicKey(cherrypy.session['prikey']),encoding=nacl.encoding.HexEncoder).decode('utf-8')
+        #report(headers,pubkey_hex_str,status)
         raise cherrypy.HTTPRedirect('/account')
     
     @cherrypy.expose
@@ -588,12 +694,6 @@ class MainApp(object):
     def sum(self, a=0, b=0):  # All inputs are strings by default
         output = int(a)+int(b)
         return str(output)
-    
-    @cherrypy.expose
-    def profile(self):  # All inputs are strings by default
-        Page = startHTML+DefaultHeader
-        Page += endHTML
-        return Page
 
     # LOGGING IN AND OUT
     @cherrypy.expose
@@ -624,7 +724,7 @@ class MainApp(object):
                 
                 report(headers,pubkey_hex_str)
                 
-                send_private_data(headers,username,unique,pri_key)
+                send_private_data(headers,username,unique,cherrypy.session['keylist'],cherrypy.session['blocked_pubkeys'],cherrypy.session['blocked_usernames'],cherrypy.session['blocked_words'],cherrypy.session['blocked_message_signatures'],cherrypy.session['favourite_message_signatures'],cherrypy.session['friends_usernames'])
                 raise cherrypy.HTTPRedirect('/login?data_created=1') 
                 
             else:
@@ -643,15 +743,26 @@ class MainApp(object):
                     addPubkey(pubkey_hex_str,signature_hex_str,headers,username)
                     report(headers,pubkey_hex_str)
                     
-                    send_private_data(headers,username,unique,pri_key)
+                    send_private_data(headers,username,unique,cherrypy.session['keylist'],[],[],[],[],[],[])
                     raise cherrypy.HTTPRedirect('/login?data_created=1') 
                     
                 prikey=data['prikeys'][-1]
                 prikey=nacl.signing.SigningKey(prikey.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
+                cherrypy.session['keylist']=data['prikeys']
+                cherrypy.session['blocked_pubkeys']=data['blocked_pubkeys']
+                cherrypy.session['blocked_usernames']=data['blocked_usernames']
+                cherrypy.session['blocked_words']=data['blocked_words']
+                cherrypy.session['blocked_message_signatures']=data['blocked_message_signatures']
+                cherrypy.session['favourite_message_signatures']=data['favourite_message_signatures']
+                cherrypy.session['friends_usernames']=data['friends_usernames']
+                
                 cherrypy.session['prikey']=prikey
                 cherrypy.session['unique']=unique
                 
-                send_private_data(headers,username,unique,cherrypy.session['prikey'])
+                for i in range(0,len(cherrypy.session['keylist'])):
+                    cherrypy.session['keylist'][i]=nacl.signing.SigningKey(bytes(cherrypy.session['keylist'][i], encoding='utf-8'),encoder=nacl.encoding.HexEncoder)
+                
+                send_private_data(headers,username,unique,[cherrypy.session['prikey']],cherrypy.session['blocked_pubkeys'],cherrypy.session['blocked_usernames'],cherrypy.session['blocked_words'],cherrypy.session['blocked_message_signatures'],cherrypy.session['favourite_message_signatures'],cherrypy.session['friends_usernames'])
                 
                 error = authoriseUserLogin(username,password,headers,unique,prikey)
                 if error == 0:
@@ -669,14 +780,14 @@ class MainApp(object):
 
     @cherrypy.expose
     def signout(self):
-        t=cherrypy.session['thread']
         global user
         global statuses
         """Logs the current user out, expires their session"""
         username = cherrypy.session.get('username')
         if username is None:
             pass
-        else:            
+        else:         
+            t=cherrypy.session['thread']   
             user=""
             e.set()
             t.join()
@@ -873,7 +984,7 @@ def report(headers, pubkey_hex_str,status="online"):
     """
     url = "http://cs302.kiwi.land/api/report"
     payload = {
-        "connection_address": get_ip()+":10040",
+        "connection_address": get_ip()+":10050",
         "connection_location": 1,
         "incoming_pubkey": pubkey_hex_str,
         "status":status
@@ -912,8 +1023,8 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
         [boolean] -- [true on sucess, false on failiure]
     """
     #url = "http://cs302.kiwi.land/api/rx_privatemessage"
-    #url = "http://192.168.1.208:10040/api/rx_privatemessage"
-    #url = "http://127.0.0.1:10040/api/rx_privatemessage"
+    #url = "http://192.168.1.208:10050/api/rx_privatemessage"
+    #url = "http://127.0.0.1:10050/api/rx_privatemessage"
     url = "http://"+address+"/api/rx_privatemessage"
     #alt login server
     #url = "http://210.54.33.182:80/api/rx_privatemessage"
@@ -940,10 +1051,12 @@ def privateMessage(headers,loginserver_record,target_pubkey,target_user,message,
           "sender_created_at" : now,  
           "signature" : signature_hex_str
     }
-    
-    if (urlSend(url,headers,payload))['response']=='ok':
-        return True
-    else:
+    try:
+        if (urlSend(url,headers,payload))['response']=='ok':
+            return True
+        else:
+            return False
+    except KeyError:
         return False
   
 def publicMessage(headers,message,prikey):
@@ -1010,22 +1123,23 @@ def getUsers(headers):
     data= urlSend(url,headers,payload)
     return data
     
-def send_private_data(headers,username,unique,prikey): 
+def send_private_data(headers,username,unique,prikeys,pubkeys,b_username,words,b_signature,f_signature,f_username): 
     now=str(time.time())
-    prikeys=[]
-    prikeys.append(prikey.encode(encoder=nacl.encoding.HexEncoder).decode('utf-8'))
-    pubkey_hex_str=generatePublicKey(prikey).encode(encoder=nacl.encoding.HexEncoder).decode('utf-8')
+    pubkey_hex_str=generatePublicKey(prikeys[-1]).encode(encoder=nacl.encoding.HexEncoder).decode('utf-8')
     url="http://cs302.kiwi.land/api/add_privatedata" 
     record=getLoginserverRecord(headers,username,pubkey_hex_str)
+    prikeys_str=prikeys
+    for i in range(0,len(prikeys)):
+        prikeys_str[i]=prikeys[i].encode(encoder=nacl.encoding.HexEncoder).decode('utf-8')
                                             
     pridata={   
-        "prikeys": prikeys,
-        "blocked_pubkeys": [],
-        "blocked_usernames": [],
-        "blocked_words": [],
-        "blocked_message_signatures": [],
-        "favourite_message_signatures": [],
-        "friends_usernames": []
+        "prikeys": (prikeys_str),
+        "blocked_pubkeys": pubkeys,
+        "blocked_usernames": b_username,
+        "blocked_words": words,
+        "blocked_message_signatures": b_signature,
+        "favourite_message_signatures": f_signature,
+        "friends_usernames": f_username
     }
     pridata=(json.dumps(pridata).encode('utf-8'))
     
@@ -1037,7 +1151,7 @@ def send_private_data(headers,username,unique,prikey):
     encrypted = (base64.b64encode(box.encrypt(pridata, nonce))).decode('utf-8')
     
     message_bytes = bytes(encrypted + record+now, encoding='utf-8')
-    signing_key1=prikey
+    signing_key1=nacl.signing.SigningKey(bytes(prikeys[-1], encoding='utf-8'),encoder=nacl.encoding.HexEncoder)
     # Sign a message with the signing key
     signed = signing_key1.sign(
         message_bytes, encoder=nacl.encoding.HexEncoder)
@@ -1091,7 +1205,7 @@ def check_messages(headers):
     private=[]
     print(address)
     for i in address:
-        if not (i == get_ip()+":10040"):
+        if not (i == get_ip()+":10050"):
             url="http://"+i+"/api/checkmessages?since="+loadTime()
             print(url,"\n\n\n\n\\n\\\n\n\n\nn\\n\n\n\n\\nn\n\n")
             payload={}
